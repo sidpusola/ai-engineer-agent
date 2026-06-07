@@ -159,15 +159,19 @@ def run_project(proj: Path):
             report = (e.strip() or o.strip())
             (out_parts if rc == 0 else err_parts).append("[tests]\n" + report)
 
-    main = proj / "main.py"
-    if main.exists():
+    # Run the demo entry point too: prefer main.py, else a demo_*.py.
+    demo = proj / "main.py"
+    if not demo.exists():
+        cands = sorted(proj.glob("demo_*.py")) + sorted(proj.glob("*_demo.py"))
+        demo = cands[0] if cands else None
+    if demo is not None and demo.exists():
         ran = True
-        rc, o, e = _run(["main.py"], proj)
+        rc, o, e = _run([demo.name], proj)
         ok = ok and rc == 0
         if o.strip():
-            out_parts.append("[main.py]\n" + o.rstrip())
+            out_parts.append(f"[{demo.name}]\n" + o.rstrip())
         if rc != 0 and e.strip():
-            err_parts.append("[main.py]\n" + e.rstrip())
+            err_parts.append(f"[{demo.name}]\n" + e.rstrip())
 
     if not ran:
         return False, "", "No tests or main.py were produced."
@@ -244,7 +248,8 @@ def write_stage(name, files):
 
 
 def run_stage(attempt, proj):
-    banner("④", f"RUNNER — unittest (attempt {attempt})", C.GREEN)
+    runner = "pytest" if _HAS_PYTEST else "unittest"
+    banner("④", f"RUNNER — {runner} + main.py (attempt {attempt})", C.GREEN)
     ok, out, err = run_project(proj)
     if out.strip():
         print(f"{C.DIM}--- output ---{C.RESET}\n{out.rstrip()}")
