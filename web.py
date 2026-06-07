@@ -68,8 +68,8 @@ def agent_events(task: str):
 
     # ---- Build / run-tests / fix loop ----
     for attempt in range(1, MAX_ATTEMPTS + 1):
-        proj = write_project(name, files)
-        yield sse({"t": "files", "project": name,
+        proj = write_project(name, files, attempt)
+        yield sse({"t": "files", "project": name, "attempt": attempt,
                    "files": [{"path": p, "size": len(c)} for p, c in files.items()]})
 
         yield sse({"t": "run", "attempt": attempt})

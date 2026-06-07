@@ -49,11 +49,51 @@
   .gpu { font-size: 11.5px; color: var(--muted); border: 1px solid var(--border); border-radius: 999px; padding: 5px 11px; display: flex; gap: 6px; align-items: center; }
   .gpu .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--runner); box-shadow: 0 0 8px var(--runner); }
 
-  /* pipeline diagram strip */
-  .flow { display: flex; gap: 8px; align-items: center; padding: 12px 24px; border-bottom: 1px solid var(--border); overflow-x: auto; }
-  .node { font-size: 11.5px; color: var(--muted); border: 1px solid var(--border); border-radius: 8px; padding: 5px 10px; white-space: nowrap; transition: all .2s; }
-  .node.on { color: #fff; border-color: var(--accent); background: rgba(108,92,231,.18); box-shadow: 0 0 0 1px var(--accent) inset; }
-  .arrow { color: var(--muted); font-size: 12px; }
+  /* ===== animated pipeline ===== */
+  .pipeline { padding: 14px 24px 13px; border-bottom: 1px solid var(--border); background: rgba(13,15,21,.5); }
+  .steps { display: flex; align-items: center; gap: 4px; overflow-x: auto; padding-bottom: 2px; }
+  .step {
+    display: flex; align-items: center; gap: 8px; padding: 7px 13px; border-radius: 11px;
+    border: 1px solid var(--border); background: var(--panel); color: var(--muted);
+    white-space: nowrap; opacity: .5; transition: opacity .25s, color .25s, border-color .25s, box-shadow .25s, transform .2s;
+  }
+  .step .s-ico { font-size: 15px; line-height: 1; }
+  .step .s-lbl { font-size: 12.5px; font-weight: 650; }
+  .step.done { opacity: 1; color: var(--text); border-color: rgba(52,211,153,.45); }
+  .step.done .s-ico { filter: grayscale(.1); }
+  .step.active {
+    opacity: 1; color: #fff; border-color: var(--accent); background: rgba(108,92,231,.16);
+    transform: translateY(-1px); animation: stepGlow 1.5s ease-in-out infinite;
+  }
+  .step.active .s-ico { display: inline-block; animation: icoPulse 1.2s ease-in-out infinite; }
+  .step.failed { opacity: 1; color: #fff; border-color: var(--fail); box-shadow: 0 0 0 1px var(--fail), 0 0 18px rgba(248,113,113,.45); }
+  .sep { color: var(--muted); opacity: .45; font-size: 12px; padding: 0 2px; }
+  @keyframes stepGlow {
+    0%,100% { box-shadow: 0 0 0 1px var(--accent), 0 0 12px rgba(108,92,231,.35); }
+    50%     { box-shadow: 0 0 0 1px var(--accent), 0 0 26px rgba(108,92,231,.75); }
+  }
+  @keyframes icoPulse { 0%,100% { transform: scale(1); } 50% { transform: scale(1.22); } }
+
+  .progress-row { display: flex; align-items: center; gap: 12px; margin-top: 13px; }
+  .p-head { display: flex; align-items: center; gap: 8px; min-width: 170px; }
+  .p-icon { font-size: 16px; }
+  .p-label { font-size: 13px; font-weight: 700; color: var(--text); }
+  .p-bar { flex: 1; height: 11px; border-radius: 6px; background: rgba(255,255,255,.05); border: 1px solid var(--border); overflow: hidden; position: relative; }
+  .p-fill {
+    height: 100%; width: 0%; border-radius: 6px; position: relative;
+    background: linear-gradient(90deg, var(--accent), var(--planner));
+    transition: width .12s linear;
+  }
+  .p-fill::after {
+    content: ""; position: absolute; inset: 0;
+    background: linear-gradient(90deg, transparent, rgba(255,255,255,.4), transparent);
+    background-size: 200% 100%; animation: shimmer 1.2s linear infinite;
+  }
+  .p-fill.idle::after { animation: none; }
+  .p-fill.done-ok { background: linear-gradient(90deg, var(--ok), #6ee7b7); }
+  .p-fill.done-fail { background: linear-gradient(90deg, var(--fail), #fda4af); }
+  @keyframes shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
+  .p-pct { font-size: 12.5px; font-weight: 700; color: var(--muted); min-width: 44px; text-align: right; font-variant-numeric: tabular-nums; }
 
   #stream { flex: 1; overflow-y: auto; padding: 22px 24px 12px; scroll-behavior: smooth; }
   .wrap { max-width: 860px; margin: 0 auto; }
@@ -142,13 +182,13 @@
     <div class="gpu"><span class="dot"></span> Qwen on your GPU</div>
   </header>
 
-  <div class="flow" id="flow">
-    <span class="node" data-k="planner">Planner</span><span class="arrow">→</span>
-    <span class="node" data-k="codegen">Code Gen</span><span class="arrow">→</span>
-    <span class="node" data-k="file">File Writer</span><span class="arrow">→</span>
-    <span class="node" data-k="runner">Runner</span><span class="arrow">→</span>
-    <span class="node" data-k="fixer">Analyzer→Fixer</span><span class="arrow">→</span>
-    <span class="node" data-k="success">Success</span>
+  <div class="pipeline">
+    <div class="steps" id="steps"></div>
+    <div class="progress-row">
+      <div class="p-head"><span class="p-icon" id="pIcon">🧠</span><span class="p-label" id="pLabel">Idle</span></div>
+      <div class="p-bar"><div class="p-fill idle" id="pFill"></div></div>
+      <span class="p-pct" id="pPct">0%</span>
+    </div>
   </div>
 
   <div id="stream">
@@ -175,7 +215,82 @@
   const streamEl = document.getElementById("stream");
   const taskInput = document.getElementById("task");
   const runBtn = document.getElementById("run");
-  const flow = document.getElementById("flow");
+
+  // ===== animated pipeline controller =====
+  const STEPS = [
+    { key: "plan",  ico: "🧠", label: "Planning" },
+    { key: "gen",   ico: "⚙️", label: "Generating" },
+    { key: "write", ico: "📁", label: "Writing Files" },
+    { key: "run",   ico: "▶",  label: "Running Tests" },
+    { key: "debug", ico: "🔍", label: "Debugging" },
+    { key: "done",  ico: "✅", label: "Success" },
+  ];
+  const KIND2STEP = { planner: "plan", codegen: "gen", fixer: "debug" };
+
+  const Pipeline = {
+    el: {}, order: STEPS.map((s) => s.key), shown: 0, target: 0, active: null, timer: null,
+    build() {
+      const steps = document.getElementById("steps");
+      steps.innerHTML = "";
+      STEPS.forEach((s, i) => {
+        if (i) { const sep = document.createElement("span"); sep.className = "sep"; sep.textContent = "→"; steps.appendChild(sep); }
+        const d = document.createElement("div");
+        d.className = "step"; d.dataset.key = s.key;
+        d.innerHTML = '<span class="s-ico">' + s.ico + '</span><span class="s-lbl">' + s.label + "</span>";
+        steps.appendChild(d); this.el[s.key] = d;
+      });
+      this.pIcon = document.getElementById("pIcon");
+      this.pLabel = document.getElementById("pLabel");
+      this.pFill = document.getElementById("pFill");
+      this.pPct = document.getElementById("pPct");
+    },
+    reset() {
+      Object.values(this.el).forEach((d) => (d.className = "step"));
+      this.active = null; this.shown = 0; this.target = 0;
+      this.pFill.className = "p-fill idle"; this.pFill.style.width = "0%";
+      this.pIcon.textContent = "🧠"; this.pLabel.textContent = "Idle"; this.pPct.textContent = "0%";
+      this._stop();
+    },
+    _start() { if (!this.timer) this.timer = setInterval(() => this._tick(), 70); },
+    _stop() { if (this.timer) { clearInterval(this.timer); this.timer = null; } },
+    _tick() {
+      if (this.active === "run") this.target = Math.min(90, this.target + 1.4);
+      else if (this.active === "write") this.target = 100;
+      else if (this.active && this.active !== "done") this.target = Math.min(92, this.target + 0.25);
+      this.shown += (this.target - this.shown) * 0.14;
+      if (Math.abs(this.target - this.shown) < 0.3) this.shown = this.target;
+      this.pFill.style.width = this.shown.toFixed(1) + "%";
+      this.pPct.textContent = Math.round(this.shown) + "%";
+    },
+    activate(key) {
+      if (!this.el[key]) return;
+      const idx = this.order.indexOf(key);
+      this.order.forEach((k, i) => { this.el[k].className = "step" + (i < idx ? " done" : ""); });
+      this.el[key].className = "step active";
+      this.active = key;
+      const s = STEPS.find((x) => x.key === key);
+      this.pIcon.textContent = s.ico; this.pLabel.textContent = s.label;
+      this.pFill.className = "p-fill";
+      this.shown = 0; this.target = key === "write" ? 100 : key === "run" ? 0 : 6;
+      this._start();
+    },
+    bump() { if (this.active && this.active !== "run" && this.active !== "done") this.target = Math.min(92, this.target + 0.8); },
+    success() {
+      this.order.forEach((k) => { if (k !== "done") this.el[k].className = "step done"; });
+      this.el["done"].className = "step active";
+      this.active = "done";
+      this.pIcon.textContent = "✅"; this.pLabel.textContent = "Success";
+      this.pFill.className = "p-fill done-ok"; this.target = 100;
+      setTimeout(() => { this.shown = 100; this.pFill.style.width = "100%"; this.pPct.textContent = "100%"; this.el["done"].className = "step done"; this._stop(); }, 650);
+    },
+    fail() {
+      if (this.active && this.el[this.active]) this.el[this.active].className = "step failed";
+      this.pIcon.textContent = "✕"; this.pLabel.textContent = "Failed";
+      this.pFill.className = "p-fill done-fail"; this.target = 100;
+      setTimeout(() => { this.shown = 100; this.pFill.style.width = "100%"; this.pPct.textContent = "100%"; this._stop(); }, 500);
+    },
+  };
+  Pipeline.build();
 
   const PILL = { planner:"①", codegen:"②", file:"③", runner:"④", fixer:"⟳", success:"✓", fail:"✕" };
   const EXAMPLES = [
@@ -200,10 +315,6 @@
   });
   function pin() { if (stick) streamEl.scrollTop = streamEl.scrollHeight; }
 
-  function lightFlow(kind) {
-    flow.querySelectorAll(".node").forEach((n) => n.classList.toggle("on", n.dataset.k === kind));
-  }
-
   function newCard(kind, label, meta) {
     const card = document.createElement("div");
     card.className = "card " + kind;
@@ -225,7 +336,7 @@
       return;
     }
     if (ev.t === "stage") {
-      lightFlow(ev.kind);
+      if (KIND2STEP[ev.kind]) Pipeline.activate(KIND2STEP[ev.kind]);
       const meta = ev.attempt ? "after attempt " + ev.attempt : "";
       const card = newCard(ev.kind, ev.label, meta);
       current = card.querySelector(".card-body");
@@ -234,12 +345,13 @@
     }
     else if (ev.t === "token") {
       buffer += ev.text;
+      Pipeline.bump();
       if (current) { current.innerHTML = marked.parse(buffer); current.classList.add("cursor"); }
       pin();
     }
     else if (ev.t === "files") {
       if (current) current.classList.remove("cursor");
-      lightFlow("file");
+      Pipeline.activate("write");
       const n = ev.files.length;
       const folder = ev.project ? "workspace/" + ev.project + "/" : "workspace/";
       const card = newCard("file", "File Writer", n + " file" + (n === 1 ? "" : "s") + " → " + folder);
@@ -257,7 +369,7 @@
       current = null;
     }
     else if (ev.t === "run") {
-      lightFlow("runner");
+      Pipeline.activate("run");
       const card = newCard("runner", "Runner", "attempt " + ev.attempt);
       current = card.querySelector(".card-body");
       current._badge = card.querySelector(".badge");
@@ -285,7 +397,7 @@
       }
     }
     else if (ev.t === "done") {
-      lightFlow(ev.success ? "success" : "fail");
+      if (ev.success) Pipeline.success(); else Pipeline.fail();
       const card = newCard(ev.success ? "success" : "fail", ev.success ? "Success" : "Gave up");
       card.querySelector(".card-body").innerHTML =
         '<div class="summary">' +
@@ -306,6 +418,7 @@
     runBtn.disabled = true;
     runBtn.querySelector("span").textContent = "Running…";
     stick = true;
+    Pipeline.reset();
 
     try {
       const res = await fetch("/api/run", {
@@ -338,7 +451,6 @@
     current = null;
     runBtn.disabled = false;
     runBtn.querySelector("span").textContent = "Run agent";
-    flow.querySelectorAll(".node").forEach((n) => n.classList.remove("on"));
   }
 
   runBtn.onclick = start;

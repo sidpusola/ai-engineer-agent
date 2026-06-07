@@ -111,17 +111,33 @@ def files_to_text(files: dict[str, str]) -> str:
 # --------------------------------------------------------------------------
 # Workspace I/O + running tests
 # --------------------------------------------------------------------------
-def write_project(name: str, files: dict[str, str]) -> Path:
-    """Write the project into workspace/<name>/, replacing its previous contents."""
+HISTORY_DIR = "attempts"   # workspace/<name>/attempts/attempt_<N>/
+
+
+def write_project(name: str, files: dict[str, str], attempt: int | None = None) -> Path:
+    """Write the project into workspace/<name>/, snapshotting each attempt to attempts/."""
     proj = WORKDIR / name
+    # Wipe the live files but PRESERVE the attempts/ history folder.
     if proj.exists():
         for f in proj.rglob("*"):
-            if f.is_file():
+            if f.is_file() and HISTORY_DIR not in f.relative_to(proj).parts:
                 f.unlink()
     for path, content in files.items():
         dest = proj / path
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_text(content, encoding="utf-8")
+
+    # Save a snapshot of this attempt for project history.
+    if attempt is not None:
+        snap = proj / HISTORY_DIR / f"attempt_{attempt}"
+        if snap.exists():
+            for old in snap.rglob("*"):
+                if old.is_file():
+                    old.unlink()
+        for path, content in files.items():
+            d = snap / path
+            d.parent.mkdir(parents=True, exist_ok=True)
+            d.write_text(content, encoding="utf-8")
     return proj
 
 
@@ -138,15 +154,56 @@ def _run(args, cwd) -> tuple[int, str, str]:
         return 1, "", f"TimeoutError: exceeded {RUN_TIMEOUT}s (possible infinite loop)."
 
 
+# --------------------------------------------------------------------------
+# Safety sandbox — refuse to run generated code that contains dangerous ops
+# --------------------------------------------------------------------------
+DANGEROUS = [
+    (r"\bos\.system\s*\(", "shell execution (os.system)"),
+    (r"\bos\.popen\s*\(", "shell execution (os.popen)"),
+    (r"\bsubprocess\b", "subprocess"),
+    (r"\bos\.(remove|unlink|rmdir|removedirs)\s*\(", "file deletion"),
+    (r"\bshutil\.(rmtree|move)\s*\(", "destructive filesystem op"),
+    (r"\.unlink\s*\(", "file deletion (Path.unlink)"),
+    (r"\beval\s*\(", "eval()"),
+    (r"\bexec\s*\(", "exec()"),
+    (r"\b__import__\s*\(", "dynamic __import__"),
+    (r"\bctypes\b", "ctypes (native memory access)"),
+    (r"\bpickle\.loads?\b", "pickle deserialization"),
+    (r"\b(socket|urllib|requests|httpx|ftplib|smtplib|telnetlib)\b", "network access"),
+    (r"\bwinreg\b", "Windows registry access"),
+    (r"rm\s+-rf", "shell: rm -rf"),
+    (r"\bopen\s*\(\s*[\"'](?:/|[A-Za-z]:[\\/])", "absolute filesystem path"),
+]
+_DANGEROUS = [(re.compile(p), why) for p, why in DANGEROUS]
+
+
+def scan_safety(proj: Path):
+    """Return a list of (file, reason) for any blocked operations in the project."""
+    violations = []
+    for f in proj.glob("*.py"):          # only the live files, not attempts/
+        text = f.read_text(encoding="utf-8", errors="ignore")
+        for rx, why in _DANGEROUS:
+            if rx.search(text):
+                violations.append((f.name, why))
+    return violations
+
+
 def run_project(proj: Path):
-    """Run the unit tests (the success gate), then the main.py demo. Returns (ok, out, err)."""
+    """Safety-check, then run the tests (success gate) + the main.py demo. Returns (ok, out, err)."""
+    # --- safety sandbox: block before running anything ---
+    violations = scan_safety(proj)
+    if violations:
+        lines = "\n".join(f"  - {fn}: {why}" for fn, why in violations)
+        return False, "", ("SECURITY SANDBOX blocked execution — the generated code "
+                           "uses operations that are not allowed:\n" + lines)
+
     tests = list(proj.glob("test_*.py")) + list(proj.glob("*_test.py"))
     out_parts, err_parts, ok, ran = [], [], True, False
 
     if tests:
         ran = True
         if _HAS_PYTEST:
-            rc, o, e = _run(["-m", "pytest", "-q"], proj)
+            rc, o, e = _run(["-m", "pytest", "-q", "--ignore=" + HISTORY_DIR], proj)
             ok = ok and rc == 0
             if o.strip():
                 out_parts.append("[tests]\n" + o.rstrip())
@@ -238,10 +295,10 @@ def fix_code(llm, task, files, error):
     return extract_files(reply) or files
 
 
-def write_stage(name, files):
+def write_stage(name, files, attempt):
     banner("③", "FILE WRITER", C.YELLOW)
-    proj = write_project(name, files)
-    info(f"  project: workspace/{name}/")
+    proj = write_project(name, files, attempt)
+    info(f"  project: workspace/{name}/   (history: attempts/attempt_{attempt}/)")
     for p, c in files.items():
         info(f"    {p}  ({len(c)} chars)")
     return proj
@@ -249,12 +306,13 @@ def write_stage(name, files):
 
 def run_stage(attempt, proj):
     runner = "pytest" if _HAS_PYTEST else "unittest"
-    banner("④", f"RUNNER — {runner} + main.py (attempt {attempt})", C.GREEN)
+    banner("④", f"RUNNER — sandbox + {runner} + main.py (attempt {attempt})", C.GREEN)
     ok, out, err = run_project(proj)
     if out.strip():
         print(f"{C.DIM}--- output ---{C.RESET}\n{out.rstrip()}")
     if err.strip():
-        print(f"{C.RED}--- failures ---{C.RESET}\n{err.rstrip()}")
+        label = "blocked" if err.startswith("SECURITY") else "failures"
+        print(f"{C.RED}--- {label} ---{C.RESET}\n{err.rstrip()}")
     return ok, out, err
 
 
@@ -274,7 +332,7 @@ def solve(task: str):
 
     proj = WORKDIR / name
     for attempt in range(1, MAX_ATTEMPTS + 1):
-        proj = write_stage(name, files)
+        proj = write_stage(name, files, attempt)
         ok, out, err = run_stage(attempt, proj)
 
         if ok:
