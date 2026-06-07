@@ -101,6 +101,11 @@
   .cursor::after { content: "▍"; color: var(--accent); animation: blink 1s steps(2) infinite; }
   @keyframes blink { 0%,50%{opacity:1} 50.01%,100%{opacity:0} }
 
+  .file-list { display: flex; flex-direction: column; gap: 6px; }
+  .file-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 11px; background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; }
+  .file-row .fname { font-family: "JetBrains Mono",Consolas,monospace; font-size: 13px; color: var(--file); }
+  .file-row .fsize { font-size: 11.5px; color: var(--muted); }
+
   .summary { display: flex; gap: 20px; flex-wrap: wrap; }
   .summary div b { display: block; font-size: 20px; }
   .summary div span { font-size: 12px; color: var(--muted); }
@@ -150,7 +155,7 @@
     <div class="wrap" id="wrap">
       <div class="welcome" id="welcome">
         <h2>Give the agent a programming task</h2>
-        <p>It will write a Python file, run it, read its own errors, and fix itself until it works.</p>
+        <p>It writes a real Python project (code + unit tests) in its own folder, runs the tests, reads the failures, and fixes itself until the tests pass.</p>
         <div class="examples" id="examples"></div>
       </div>
     </div>
@@ -161,7 +166,7 @@
       <input id="task" placeholder="e.g. compute the factorial of 2000 using recursion" />
       <button id="run"><span>Run agent</span></button>
     </div>
-    <div class="hint">One run at a time (single GPU). The finished program is saved to <b>workspace/solution.py</b>.</div>
+    <div class="hint">One run at a time (single GPU). The finished project is saved in <b>workspace/</b>.</div>
   </footer>
 
 <script>
@@ -174,10 +179,10 @@
 
   const PILL = { planner:"①", codegen:"②", file:"③", runner:"④", fixer:"⟳", success:"✓", fail:"✕" };
   const EXAMPLES = [
-    "compute the factorial of 2000 using recursion",
-    "print the first 20 prime numbers and their sum",
-    "implement quicksort and verify it against sorted() with asserts",
-    "parse '3 + 4 * 2 - (1 + 1)' respecting precedence without eval",
+    "build a BankAccount class with deposit/withdraw (raise on overdraft) and unit tests",
+    "a Fraction class that adds and multiplies and reduces to lowest terms, with tests",
+    "a Stack and Queue module with full unit tests",
+    "a roman_to_int and int_to_roman converter with unit tests covering tricky cases",
   ];
   const ex = document.getElementById("examples");
   EXAMPLES.forEach((e) => {
@@ -232,10 +237,23 @@
       if (current) { current.innerHTML = marked.parse(buffer); current.classList.add("cursor"); }
       pin();
     }
-    else if (ev.t === "file") {
+    else if (ev.t === "files") {
       if (current) current.classList.remove("cursor");
       lightFlow("file");
-      const card = newCard("file", "File Writer", "wrote " + ev.size + " chars → workspace/solution.py");
+      const n = ev.files.length;
+      const folder = ev.project ? "workspace/" + ev.project + "/" : "workspace/";
+      const card = newCard("file", "File Writer", n + " file" + (n === 1 ? "" : "s") + " → " + folder);
+      const body = card.querySelector(".card-body");
+      const list = document.createElement("div");
+      list.className = "file-list";
+      for (const f of ev.files) {
+        const row = document.createElement("div");
+        row.className = "file-row";
+        row.innerHTML = '<span class="fname"></span><span class="fsize">' + f.size + ' chars</span>';
+        row.querySelector(".fname").textContent = f.path;
+        list.appendChild(row);
+      }
+      body.appendChild(list);
       current = null;
     }
     else if (ev.t === "run") {

@@ -1,10 +1,11 @@
 # AI Software Engineer Agent
 
-Not a chatbot — an **autonomous agent loop** that uses your local **Qwen2.5-Coder-3B**
-to plan, write, run, and *self-correct* Python code until it actually works.
+Not a chatbot — an **autonomous agent loop** that uses your local **Qwen2.5-Coder-14B**
+to plan, write, run, and *self-correct* a Python **project (one or more files)** until it
+actually works.
 
 ```
-task ─▶ Planner ─▶ Code Generator ─▶ File Writer ─▶ Runner
+task ─▶ Planner ─▶ Code Generator ─▶ File Writer ─▶ Runner (main.py)
                                                        │
                        success ◀── pass? ──────────────┤
                                                        │ fail
@@ -15,11 +16,11 @@ task ─▶ Planner ─▶ Code Generator ─▶ File Writer ─▶ Runner
 Each arrow is a real step:
 | Stage             | What happens                                                            |
 |-------------------|-------------------------------------------------------------------------|
-| **Planner**       | Qwen writes a short plan for a single-file solution.                    |
-| **Code Generator**| Qwen writes a complete `.py` file with a runnable demo.                 |
-| **File Writer**   | The code is saved to `workspace/solution.py`.                          |
-| **Runner**        | The file is executed in a subprocess (30s timeout).                    |
-| **Error Analyzer / Fixer** | On failure, the code + traceback go back to Qwen, which returns a corrected file. The loop repeats until the run exits cleanly. |
+| **Planner**       | Qwen writes a short plan, including which files the project needs.       |
+| **Code Generator**| Qwen emits one or more files, each tagged `FILE: <path>`, with a `main.py` entry point. |
+| **File Writer**   | All files are written into `workspace/`.                                |
+| **Runner**        | `main.py` is executed in a subprocess (30s timeout).                    |
+| **Error Analyzer / Fixer** | On failure, all files + the traceback go back to Qwen, which returns the corrected project. The loop repeats until the run exits cleanly. |
 
 ## Two ways to run it
 
@@ -42,7 +43,7 @@ Or double-click **`run-web.bat`**.
 ```
 Or double-click **`run-agent.bat`** (and pass the task in quotes).
 
-The finished program is left in **`workspace/solution.py`** either way.
+The finished project is left in **`workspace/`** either way.
 
 ## Files
 | File          | Purpose                                                      |
@@ -51,7 +52,7 @@ The finished program is left in **`workspace/solution.py`** either way.
 | `agent.py`    | CLI agent + the shared prompts and run/loop helpers.         |
 | `web.py`      | FastAPI server that streams the pipeline as live events.     |
 | `web.html`    | The live pipeline web UI.                                    |
-| `workspace/`  | Where the generated `solution.py` is written and run.        |
+| `workspace/`  | Where the generated project files are written and `main.py` is run. |
 
 ## Notes & tuning (in `agent.py`)
 - `MAX_ATTEMPTS` — how many self-correction rounds (default 5).

@@ -4,6 +4,9 @@ workspace/
 # Logs
 *.log
 
+# Derived copy-paste bundle of the source
+CODE_BUNDLE.md
+
 # Python
 __pycache__/
 *.py[cod]

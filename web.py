@@ -1,5 +1,5 @@
 """
-Web UI for the AI Software Engineer Agent.
+Web UI for the AI Software Engineer Agent (multi-file projects).
 
 Runs the same autonomous loop as agent.py, but streams every stage
 (Planner → CodeGen → FileWriter → Runner → Error Analyzer → Fixer → Success)
@@ -23,11 +23,13 @@ from agent import (
     PLANNER_SYS,
     CODEGEN_SYS,
     FIXER_SYS,
-    extract_code,
-    run_solution,
-    SOLUTION,
+    extract_project,
+    extract_files,
+    files_to_text,
+    write_project,
+    run_project,
     MAX_ATTEMPTS,
-    RUN_TIMEOUT,
+    _slug,
 )
 
 llm = LLM()                 # loads Qwen once at startup
@@ -55,22 +57,23 @@ def agent_events(task: str):
         plan += tok
         yield sse({"t": "token", "text": tok})
 
-    # ---- Code generator ----
-    yield sse({"t": "stage", "kind": "codegen", "label": "Code Generator"})
-    cg_user = f"Task:\n{task}\n\nPlan:\n{plan}\n\nWrite the complete Python file."
+    # ---- Code generator (+ tests) ----
+    yield sse({"t": "stage", "kind": "codegen", "label": "Code Generator (+ tests)"})
+    cg_user = f"Task:\n{task}\n\nPlan:\n{plan}\n\nWrite the complete project with tests."
     reply = ""
-    for tok in llm.stream(CODEGEN_SYS, cg_user, max_new_tokens=1300, temperature=0.2):
+    for tok in llm.stream(CODEGEN_SYS, cg_user, max_new_tokens=1800, temperature=0.2):
         reply += tok
         yield sse({"t": "token", "text": tok})
-    code = extract_code(reply)
+    name, files = extract_project(reply, fallback=_slug(task))
 
-    # ---- Build / run / fix loop ----
+    # ---- Build / run-tests / fix loop ----
     for attempt in range(1, MAX_ATTEMPTS + 1):
-        SOLUTION.write_text(code, encoding="utf-8")
-        yield sse({"t": "file", "path": str(SOLUTION), "size": len(code), "code": code})
+        proj = write_project(name, files)
+        yield sse({"t": "files", "project": name,
+                   "files": [{"path": p, "size": len(c)} for p, c in files.items()]})
 
         yield sse({"t": "run", "attempt": attempt})
-        ok, out, err = run_solution()
+        ok, out, err = run_project(proj)
         if out.strip():
             yield sse({"t": "stdout", "text": out.rstrip()})
         if err.strip():
@@ -80,7 +83,7 @@ def agent_events(task: str):
         if ok:
             yield sse({
                 "t": "done", "success": True, "attempts": attempt,
-                "elapsed": round(time.time() - started, 1), "file": str(SOLUTION),
+                "elapsed": round(time.time() - started, 1), "files": len(files),
             })
             return
 
@@ -88,18 +91,18 @@ def agent_events(task: str):
             yield sse({"t": "stage", "kind": "fixer",
                        "label": "Error Analyzer → Fixer", "attempt": attempt})
             fx_user = (
-                f"Task:\n{task}\n\nCurrent code:\n```python\n{code}\n```\n\n"
-                f"Error when run:\n{err}\n\nFix the bug and return the full corrected file."
+                f"Task:\n{task}\n\nCurrent project:\n{files_to_text(files)}\n\n"
+                f"Test/run output:\n{err}\n\nFix the code so the tests pass and return the full corrected project."
             )
             reply = ""
-            for tok in llm.stream(FIXER_SYS, fx_user, max_new_tokens=1300, temperature=0.2):
+            for tok in llm.stream(FIXER_SYS, fx_user, max_new_tokens=1800, temperature=0.2):
                 reply += tok
                 yield sse({"t": "token", "text": tok})
-            code = extract_code(reply)
+            files = extract_files(reply) or files
 
     yield sse({
         "t": "done", "success": False, "attempts": MAX_ATTEMPTS,
-        "elapsed": round(time.time() - started, 1), "file": str(SOLUTION),
+        "elapsed": round(time.time() - started, 1), "files": len(files),
     })
 
 
@@ -114,7 +117,7 @@ def run(req: RunRequest):
         try:
             if not task:
                 yield sse({"t": "done", "success": False, "attempts": 0,
-                           "elapsed": 0, "file": ""})
+                           "elapsed": 0, "files": 0})
                 return
             yield from agent_events(task)
         finally:
